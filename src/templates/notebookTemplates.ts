@@ -69,7 +69,7 @@ export const templates: Record<string, NotebookTemplate> = {
         content: 'A beautiful sunset over mountains',
         io: {
           inputs: [],
-          outputs: [{ id: 'image', name: 'Generated Image', type: 'image' }]
+          outputs: [{ id: crypto.randomUUID(), name: 'Generated Image', type: 'image' }]
         }
       }
     ]

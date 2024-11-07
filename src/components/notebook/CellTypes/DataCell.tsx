@@ -1,243 +1,136 @@
 import React, { useState } from 'react';
-import { Cell } from '../../../types/Cell';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { CellComponentProps } from './BaseCellComponent';
 import { FileUpload } from './FileUpload';
-import { JsonEditor } from './JsonEditor';
+import { CellIO } from '@/types/IOTypes';
+import { DataSourceType } from '@/types/DataSource';
 
-interface DataCellProps {
-  cell: Cell;
-  onUpdate?: (content: string) => void;
-  onExecute?: () => void;
-  inputs?: Record<string, any>;
-  isHeader?: boolean;
+interface DataCellConfig {
+  filename: string | null;
 }
 
-interface DataResult {
-  data: any[];
+interface DataRow {
+  [key: string]: string | number | null;
+}
+
+interface DataCellResult {
+  data: DataRow[];
   columns: string[];
   error?: string;
 }
 
-interface InputConfig {
-  id: string;
-  label: string;
-  type: string;
-  options?: string[];
-  default?: any;
-}
-
-const locks = new Set<string>();
-
-const withLock = async (key: string, operation: () => Promise<void>) => {
-  if (locks.has(key)) {
-    throw new Error('Operation in progress');
-  }
-  locks.add(key);
-  try {
-    await operation();
-  } finally {
-    locks.delete(key);
-  }
-};
-
-const validateInput = (value: any, type: string): any => {
-  switch (type) {
-    case 'number':
-      const num = Number(value);
-      return isNaN(num) ? null : num;
-    case 'string':
-      return String(value);
-    default:
-      return value;
-  }
-};
-
-export const DataCell: React.FC<DataCellProps> = ({ 
-  cell, 
-  onUpdate, 
-  onExecute, 
-  inputs,
-  isHeader 
-}) => {
-  const defaultInputs: InputConfig[] = [
-    {
-      id: 'fileName',
-      label: 'File Name',
-      type: 'string',
-      default: 'sample'
-    },
-    {
-      id: 'limit',
-      label: 'Row Limit',
-      type: 'number',
-      default: 100
-    }
-  ];
-
-  const [content, setContent] = useState(cell.content);
-  const [result, setResult] = useState<DataResult | null>(null);
-  const [localInputs, setLocalInputs] = useState<Record<string, any>>(() => {
-    return defaultInputs.reduce((acc, input) => ({
-      ...acc,
-      [input.id]: inputs?.[input.id] ?? input.default
-    }), {});
-  });
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-
-  const onInputChange = (id: string, value: any) => {
-    setLocalInputs(prev => ({ ...prev, [id]: value }));
-  };
-
-  const handleExecute = async () => {
+export const DataCell: React.FC<CellComponentProps> = ({ cell, onUpdate, onExecute, onInputChange }) => {
+  const [config, setConfig] = useState<DataCellConfig>(() => {
     try {
-      let cellConfig;
-      try {
-        cellConfig = JSON.parse(cell.content);
-      } catch (e) {
-        throw new Error('Invalid JSON configuration');
-      }
-      
-      if (!cellConfig.source || !cellConfig.query) {
-        throw new Error('Missing required configuration: source and query');
-      }
-      
-      // Validate required inputs
-      if (!localInputs.fileName) {
-        throw new Error('File Name is required');
-      }
-      
-      // Show running state
-      onExecute?.();
-      
-      await withLock(cell.id, async () => {
-        const response = await fetch('/api/data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ 
-            source: cellConfig.source,
-            query: cellConfig.query,
-            parameters: {
-              fileName: localInputs.fileName,
-              limit: parseInt(localInputs.limit) || 100
-            }
-          }),
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(data.error || `HTTP error! status: ${response.status}`);
-        }
-        
-        if (!data || !Array.isArray(data.data)) {
-          throw new Error('Invalid response format');
-        }
-        
-        setResult(data);
-      });
-    } catch (error) {
-      console.error('Data execution error:', error);
-      setResult({
-        data: [],
-        columns: [],
-        error: error instanceof Error 
-          ? error.message 
-          : 'An unexpected error occurred while fetching data'
-      });
+      return JSON.parse(cell.content);
+    } catch {
+      return { filename: null };
     }
+  });
+
+  const handleUploadComplete = (filename: string) => {
+    const newConfig: DataCellConfig = { filename };
+    setConfig(newConfig);
+    onUpdate?.(JSON.stringify(newConfig));
   };
 
-  const handleContentChange = (newContent: string) => {
-    setContent(newContent);
-    setHasUnsavedChanges(true);
+  const handleExecuteClick = () => {
+    if (!config.filename) {
+      cell.result = { error: 'Please select a file first' };
+      return;
+    }
+    onExecute?.();
   };
 
-  const handleSave = () => {
-    onUpdate?.(content);
-    setHasUnsavedChanges(false);
-  };
+  const result = cell.result as DataCellResult | undefined;
 
   return (
-    <div className="space-y-4">
-      <FileUpload 
-        onUploadComplete={(filename) => {
-          onInputChange('fileName', filename);
-        }}
-      />
-      
-      {/* Configuration Section */}
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Configuration
-        </h3>
-        <JsonEditor
-          value={content}
-          onChange={handleContentChange}
-          onSave={handleSave}
+    <div className="space-y-4 p-4">
+      {!config.filename ? (
+        <FileUpload 
+          onUploadComplete={handleUploadComplete}
+          disabled={cell.status === 'running'}
         />
-        {hasUnsavedChanges && (
-          <div className="flex justify-end">
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600 dark:text-gray-400">
+              Current file: {config.filename}
+            </span>
             <button
-              onClick={handleSave}
-              className="px-3 py-1 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600"
+              onClick={() => setConfig({ filename: null })}
+              className="text-sm text-red-600 hover:text-red-700"
             >
-              Save Changes
+              Remove file
             </button>
           </div>
-        )}
-      </div>
-
-      {/* Execute Button */}
-      <div className="flex justify-end">
-        <button
-          onClick={handleExecute}
-          className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600"
-        >
-          Execute
-        </button>
-      </div>
-
-      {/* Results Section */}
-      {result && (
-        <div className="space-y-4">
-          {result.error ? (
-            <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg">
-              {result.error}
-            </div>
-          ) : (
-            <>
-              <div className="relative w-full">
-                <div className="overflow-x-auto">
-                  <table className="table-auto w-full divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead className="bg-gray-50 dark:bg-gray-800">
-                      <tr>
-                        {result.columns.map((column) => (
-                          <th key={column} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">
-                            {column}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                      {result.data.map((row, i) => (
-                        <tr key={i}>
-                          {result.columns.map((column) => (
-                            <td key={column} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                              {row[column]}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          )}
+          <button
+            onClick={handleExecuteClick}
+            disabled={cell.status === 'running'}
+            className="btn-primary"
+          >
+            {cell.status === 'running' ? 'Loading...' : 'Load Data'}
+          </button>
         </div>
       )}
+
+      {result?.error && (
+        <div className="text-red-500 text-sm">{result.error}</div>
+      )}
+
+      {result?.data && Array.isArray(result.data) && result.data.length > 0 ? (
+        <div className="overflow-x-auto max-h-[500px] overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead className="bg-gray-50 dark:bg-gray-800">
+              <tr>
+                {result.columns.map((column, i) => (
+                  <th
+                    key={i}
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 
+                      dark:text-gray-400 uppercase tracking-wider"
+                  >
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
+              {result.data.map((row, i) => (
+                <tr key={i}>
+                  {result.columns.map((column, j) => (
+                    <td
+                      key={j}
+                      className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 
+                        dark:text-gray-100"
+                    >
+                      {row[column] != null ? String(row[column]) : ''}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : cell.status === 'running' ? (
+        <div className="flex items-center justify-center p-8 text-gray-500 dark:text-gray-400">
+          <svg className="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24">
+            <circle 
+              className="opacity-25" 
+              cx="12" 
+              cy="12" 
+              r="10" 
+              stroke="currentColor" 
+              strokeWidth="4"
+              fill="none"
+            />
+            <path 
+              className="opacity-75" 
+              fill="currentColor" 
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            />
+          </svg>
+          Loading data...
+        </div>
+      ) : null}
     </div>
   );
 }; 

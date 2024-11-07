@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import formidable from 'formidable';
 import { parse } from 'csv-parse/sync';
+import crypto from 'crypto';
 
 export const config = {
   api: {
@@ -47,13 +48,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       to: 5 // Only parse first 5 rows for preview
     });
 
-    // Rename file to remove random characters
-    const newPath = path.join(uploadDir, file.originalFilename || file.newFilename);
-    await fs.rename(file.filepath, newPath);
+    // Generate a safe filename using UUID
+    const fileId = crypto.randomUUID();
+    const originalName = path.parse(file.originalFilename || file.newFilename).name;
+    const safeOriginalName = originalName.replace(/[^a-zA-Z0-9]/g, '_');
+    const newFilename = `${safeOriginalName}_${fileId}.csv`;
+    const newPath = path.join(uploadDir, newFilename);
+    
+    // Use copyFile instead of rename for better cross-platform compatibility
+    await fs.copyFile(file.filepath, newPath);
+    await fs.unlink(file.filepath); // Clean up the original file
 
     res.status(200).json({ 
       message: 'File uploaded successfully',
-      filename: path.parse(file.originalFilename || file.newFilename).name,
+      filename: newFilename, // Return the full filename including .csv
       preview: records
     });
   } catch (error) {
